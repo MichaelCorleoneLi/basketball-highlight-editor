@@ -340,67 +340,7 @@ class ProjectNotifier extends Notifier<ProjectState> {
         }
         if (_disposed || generation != _projectLoadGeneration) return;
         state = state.copyWith(busyMessage: '正在识别篮筐区域…');
-        Rect? suggestedRoi;
-        Rect? hoopBbox;
-        String? roiSource;
-        var previewTimeMs = 1000;
-        String? roiSuggestionError;
-        double? roiConfidence;
-        try {
-          final suggestion = await session.suggestRoi(
-            startMs: (linkedVideo?['analysis_start_ms'] as num?)?.toInt() ?? 0,
-            duration: 20,
-            sampleFps: 1,
-            maxSamples: 12,
-            confidence: 0.05,
-          );
-          final roi = (suggestion['roi'] as Map?)?.cast<String, dynamic>();
-          if (roi != null && linkedVideo != null) {
-            suggestedRoi = _normalizeRoi(roi, linkedVideo);
-            final calibration = (suggestion['calibration'] as Map?)
-                ?.cast<String, dynamic>();
-            final rawHoopBbox = calibration?['hoop_bbox'];
-            if (rawHoopBbox is List) {
-              hoopBbox = _normalizeBbox(rawHoopBbox, linkedVideo);
-            }
-            // 自动建议只进入会话草稿，最终由 applyWorkflowDraft 写入生效配置。
-            roiSource = 'auto';
-            roiConfidence = (calibration?['confidence'] as num?)?.toDouble();
-            previewTimeMs =
-                ((suggestion['preview_time_ms'] as num?)?.toInt() ?? 1000)
-                    .clamp(0, duration)
-                    .toInt();
-          }
-        } catch (error) {
-          // 自动 ROI 是便利功能,失败不应阻塞导入,用户可手动框选。
-          roiSuggestionError = error.toString();
-        }
-        if (_disposed || generation != _projectLoadGeneration) return;
-        if (previewTimeMs != 1000) {
-          try {
-            final preview = await session.extractPreview(timeMs: previewTimeMs);
-            if (!_disposed && generation == _projectLoadGeneration) {
-              state = state.copyWith(
-                previewPath: preview['path']?.toString(),
-                previewTimeMs: previewTimeMs,
-              );
-            }
-          } catch (error) {
-            if (!_disposed && generation == _projectLoadGeneration) {
-              _pushNotice('自动切换标记画面失败：$error', NoticeSeverity.error);
-            }
-          }
-        }
-        if (_disposed || generation != _projectLoadGeneration) return;
-        state = state.copyWith(
-          previewTimeMs: previewTimeMs,
-          suggestedRoi: suggestedRoi,
-          hoopBbox: hoopBbox,
-          roiSource: roiSource,
-          roiConfidence: roiConfidence,
-          roiSuggestionError: roiSuggestionError,
-          roiDetecting: false,
-        );
+        await suggestRoiForCurrentVideo();
         _reviewHistory.clear();
       },
       busyMessage: '正在准备视频…',
@@ -408,6 +348,70 @@ class ProjectNotifier extends Notifier<ProjectState> {
     );
     if (projectCreatedForRecent && !_disposed) {
       await loadRecentProjects();
+    }
+  }
+
+  /// 对当前视频重新自动识别。已有项目若未保存 ROI，也可在配置页恢复建议区域。
+  Future<bool> suggestRoiForCurrentVideo() async {
+    final video = state.video;
+    if (video == null || _disposed) return false;
+    final generation = _projectLoadGeneration;
+    final session = ref.read(projectSessionProvider);
+    final duration = (video['duration_ms'] as num?)?.toInt() ?? 1000;
+    state = state.copyWith(roiDetecting: true, roiSuggestionError: null);
+    try {
+      final suggestion = await session.suggestRoi(
+        startMs: (video['analysis_start_ms'] as num?)?.toInt() ?? 0,
+        duration: 20,
+        sampleFps: 1,
+        maxSamples: 12,
+        confidence: 0.05,
+      );
+      if (_disposed || generation != _projectLoadGeneration) return false;
+      final roi = (suggestion['roi'] as Map?)?.cast<String, dynamic>();
+      if (roi == null) throw const FormatException('自动识别未返回检测区域');
+      final calibration = (suggestion['calibration'] as Map?)
+          ?.cast<String, dynamic>();
+      final rawHoopBbox = calibration?['hoop_bbox'];
+      final hoopBbox = rawHoopBbox is List
+          ? _normalizeBbox(rawHoopBbox, video)
+          : null;
+      final previewTimeMs =
+          ((suggestion['preview_time_ms'] as num?)?.toInt() ?? 1000)
+              .clamp(0, duration)
+              .toInt();
+      if (previewTimeMs != state.previewTimeMs) {
+        try {
+          final preview = await session.extractPreview(timeMs: previewTimeMs);
+          if (!_disposed && generation == _projectLoadGeneration) {
+            state = state.copyWith(previewPath: preview['path']?.toString());
+          }
+        } catch (error) {
+          if (!_disposed && generation == _projectLoadGeneration) {
+            _pushNotice('自动切换标记画面失败：$error', NoticeSeverity.error);
+          }
+        }
+      }
+      if (_disposed || generation != _projectLoadGeneration) return false;
+      state = state.copyWith(
+        previewTimeMs: previewTimeMs,
+        suggestedRoi: _normalizeRoi(roi, video),
+        hoopBbox: hoopBbox,
+        roiSource: 'auto',
+        roiConfidence: (calibration?['confidence'] as num?)?.toDouble(),
+        roiSuggestionError: null,
+      );
+      return true;
+    } catch (error) {
+      // 自动识别失败时仍允许用户手动框选。
+      if (!_disposed && generation == _projectLoadGeneration) {
+        state = state.copyWith(roiSuggestionError: error.toString());
+      }
+      return false;
+    } finally {
+      if (!_disposed && generation == _projectLoadGeneration) {
+        state = state.copyWith(roiDetecting: false);
+      }
     }
   }
 

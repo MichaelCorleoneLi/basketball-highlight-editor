@@ -123,6 +123,28 @@ void main() {
       expect(container.read(projectProvider).previewTimeMs, 4000);
     });
 
+    test('自动识别失败后可在当前项目重新识别', () async {
+      final fakeSession = _FakeProjectSession();
+      final container = ProviderContainer(
+        overrides: <Override>[
+          projectSessionProvider.overrideWithValue(fakeSession),
+          engineBootstrapProvider.overrideWith(_StubEngineBootstrap.new),
+        ],
+      );
+      addTearDown(container.dispose);
+      final notifier = container.read(projectProvider.notifier);
+      await notifier.selectVideo('/path/sample.mp4');
+      expect(container.read(projectProvider).suggestedRoi, isNull);
+
+      fakeSession.returnRoiSuggestion = true;
+      expect(await notifier.suggestRoiForCurrentVideo(), isTrue);
+      final state = container.read(projectProvider);
+      expect(state.suggestedRoi, isNotNull);
+      expect(state.hoopBbox, isNotNull);
+      expect(state.roiSource, 'auto');
+      expect(state.roiSuggestionError, isNull);
+    });
+
     test('opening an invalid project keeps the current UI state', () async {
       final fakeSession = _FakeProjectSession();
       final container = ProviderContainer(

@@ -54,6 +54,7 @@ class _ImportVideoScreenState extends ConsumerState<ImportVideoScreen> {
   Rect? _autoHoopBbox;
   bool _netUserEdited = false;
   bool _editingNet = false;
+  bool _missingRoiRetryStarted = false;
   int _analysisStartMs = 0;
   bool _rangeTouched = false;
   int _analysisEndMs = 0;
@@ -92,16 +93,41 @@ class _ImportVideoScreenState extends ConsumerState<ImportVideoScreen> {
       }
     }
     if (!mounted) return;
-    _draftLoaded = true;
     final currentState = ref.read(projectProvider);
-    if (currentState.video != null) {
-      _syncFromState(currentState);
-    }
+    setState(() {
+      _draftLoaded = true;
+      if (currentState.video != null) _syncFromState(currentState);
+    });
     if (draft != null && draft.isNotEmpty && currentState.video != null) {
       _applyDraftLocally(draft);
       setState(() => _showExistingDraft = true);
+      if (_step == 2) unawaited(_recoverMissingRoi());
       return;
     }
+  }
+
+  Future<void> _recoverMissingRoi() async {
+    if (_missingRoiRetryStarted ||
+        _roi != null ||
+        ref.read(projectProvider).video == null) {
+      return;
+    }
+    _missingRoiRetryStarted = true;
+    final found = await ref
+        .read(projectProvider.notifier)
+        .suggestRoiForCurrentVideo();
+    if (!mounted || !found || _roi != null) return;
+    final state = ref.read(projectProvider);
+    setState(() {
+      _roi = state.suggestedRoi;
+      _hoopBbox = state.hoopBbox;
+      _netRoi = state.netRoi ?? _recommendedNetRoi(_roi, _hoopBbox);
+      _autoRoi = _roi;
+      _autoNetRoi = _netRoi;
+      _autoHoopBbox = _hoopBbox;
+      _netUserEdited = false;
+    });
+    await _persistDraft();
   }
 
   void _syncFromState(ProjectState state) {
@@ -223,7 +249,7 @@ class _ImportVideoScreenState extends ConsumerState<ImportVideoScreen> {
               id: 'import-draft-save-${DateTime.now().microsecondsSinceEpoch}',
               severity: NoticeSeverity.error,
               title: '配置草稿保存失败',
-                description: context.bheText(error.toString()),
+              description: context.bheText(error.toString()),
             ),
           );
     }
@@ -419,6 +445,7 @@ class _ImportVideoScreenState extends ConsumerState<ImportVideoScreen> {
         ref.read(projectProvider.notifier).setPreviewTimeOnly(_analysisStartMs);
       }
     }
+    if (next == 2) unawaited(_recoverMissingRoi());
   }
 
   Future<void> _back() async {
@@ -505,6 +532,7 @@ class _ImportVideoScreenState extends ConsumerState<ImportVideoScreen> {
           _autoHoopBbox = null;
           _netUserEdited = false;
           _editingNet = false;
+          _missingRoiRetryStarted = false;
           _analysisStartMs = 0;
           _analysisEndMs = 0;
         });
@@ -517,6 +545,7 @@ class _ImportVideoScreenState extends ConsumerState<ImportVideoScreen> {
       _autoHoopBbox = null;
       _netUserEdited = false;
       _editingNet = false;
+      _missingRoiRetryStarted = false;
       _rangeTouched = false;
       _syncFromState(next);
       setState(() => _step = 1);
@@ -748,7 +777,7 @@ class _ImportVideoScreenState extends ConsumerState<ImportVideoScreen> {
           roi: _roi,
           netRoi: _netRoi,
           editingNet: _editingNet,
-          enabled: state.video != null && !busy,
+          enabled: state.video != null && !busy && !state.roiDetecting,
           aspectRatio: sourceWidth / sourceHeight,
           onEditNetChanged: (value) => setState(() => _editingNet = value),
           onPreviewTimeChanged: (timeMs) {
@@ -796,6 +825,10 @@ class _ImportVideoScreenState extends ConsumerState<ImportVideoScreen> {
               }
             });
             unawaited(_persistDraft());
+          },
+          onRetryAuto: () {
+            _missingRoiRetryStarted = false;
+            unawaited(_recoverMissingRoi());
           },
         );
       case 3:
@@ -1112,6 +1145,7 @@ class _DetectionStep extends StatefulWidget {
     required this.previewPlaying,
     required this.onChanged,
     required this.onResetCurrent,
+    required this.onRetryAuto,
   });
   final ProjectState state;
   final Rect? hoopBbox;
@@ -1127,6 +1161,7 @@ class _DetectionStep extends StatefulWidget {
   final bool previewPlaying;
   final ValueChanged<Rect> onChanged;
   final VoidCallback onResetCurrent;
+  final VoidCallback onRetryAuto;
 
   @override
   State<_DetectionStep> createState() => _DetectionStepState();
@@ -1300,6 +1335,25 @@ class _DetectionStepState extends State<_DetectionStep> {
             ),
             const SizedBox(height: Spacing.sm),
           ],
+          if (widget.roi == null && !state.roiDetecting) ...[
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    context.bheText('未能自动识别篮筐，请在画面上拖出投篮分析区。'),
+                    style: Theme.of(
+                      context,
+                    ).textTheme.bodySmall?.copyWith(color: c.warning),
+                  ),
+                ),
+                TextButton(
+                  onPressed: widget.onRetryAuto,
+                  child: Text(context.bheText('重新识别')),
+                ),
+              ],
+            ),
+            const SizedBox(height: Spacing.sm),
+          ],
           _RoiCanvas(
             enabled: widget.enabled && !state.previewRefreshing,
             videoController: _playerReady ? _controller : null,
@@ -1390,12 +1444,8 @@ class _DetectionStepState extends State<_DetectionStep> {
           const SizedBox(height: Spacing.xs),
           Text(
             widget.editingNet
-                ? context.bheText(
-                    '当前编辑白色篮网区域：覆盖篮圈下方到网底，尽量不要包含篮板、球员或地面。',
-                  )
-                : context.bheText(
-                    '当前编辑橙色投篮分析区域：覆盖来球轨迹、篮圈和篮网下方的落球范围。',
-                  ),
+                ? context.bheText('当前编辑白色篮网区域：覆盖篮圈下方到网底，尽量不要包含篮板、球员或地面。')
+                : context.bheText('当前编辑橙色投篮分析区域：覆盖来球轨迹、篮圈和篮网下方的落球范围。'),
             style: Theme.of(context).textTheme.bodySmall?.copyWith(
               color: c.textSecondary,
               height: 1.4,
@@ -1635,9 +1685,7 @@ class _SummaryStep extends StatelessWidget {
           if (fastModeEnabled && analysisMode == 'fast')
             Align(
               alignment: Alignment.centerLeft,
-              child: Text(
-                context.bheText('快速分析使用低规格代理，可能漏检少量片段。'),
-              ),
+              child: Text(context.bheText('快速分析使用低规格代理，可能漏检少量片段。')),
             ),
           const SizedBox(height: Spacing.sm),
           _ClipWindowSelector(
@@ -1672,9 +1720,7 @@ class _SummaryStep extends StatelessWidget {
                           style: const TextStyle(fontWeight: FontWeight.w600),
                         ),
                         TextSpan(
-                          text: context.bheText(
-                            '\n实际耗时会受视频编码、磁盘和设备负载影响。',
-                          ),
+                          text: context.bheText('\n实际耗时会受视频编码、磁盘和设备负载影响。'),
                         ),
                       ],
                     ),
@@ -2084,9 +2130,7 @@ class _AnalysisRangeEditorState extends State<_AnalysisRangeEditor> {
           ),
           Text(
             fullRange
-                ? context.bheText(
-                    '默认扫描完整视频。播放视频后设定起点和终点，可排除热身或结束部分。',
-                  )
+                ? context.bheText('默认扫描完整视频。播放视频后设定起点和终点，可排除热身或结束部分。')
                 : context.bheText(
                     '仅扫描 ${_formatDuration(start)} - ${_formatDuration(end)}。',
                   ),
@@ -2800,10 +2844,7 @@ class _RoiCanvasState extends State<_RoiCanvas> {
                                   constraints.biggest,
                                 )
                               : null,
-                          onPanUpdate:
-                              widget.enabled &&
-                                  _start != null &&
-                                  _dragMode != null
+                          onPanUpdate: widget.enabled
                               ? (details) => _updateDrag(
                                   _toCanvasPoint(
                                     details.localPosition,

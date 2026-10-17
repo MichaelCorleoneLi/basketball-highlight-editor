@@ -499,6 +499,9 @@ const _englishText = <String, String>{
   '支持 MP4、MOV、M4V、AVI、MKV。原始视频不会被修改或上传。':
       'Supports MP4, MOV, M4V, AVI, and MKV. The source video is not modified or uploaded.',
   '篮网检测区': 'Net detection area',
+  '未能自动识别篮筐，请在画面上拖出投篮分析区。':
+      'The hoop was not detected. Drag on the video to create the shot analysis area.',
+  '重新识别': 'Detect again',
   '当前编辑白色篮网区域：覆盖篮圈下方到网底，尽量不要包含篮板、球员或地面。':
       'Editing the white net region: cover the area below the rim down to the bottom of the net; avoid the backboard, players, and floor.',
   '当前编辑橙色投篮分析区域：覆盖来球轨迹、篮圈和篮网下方的落球范围。':
