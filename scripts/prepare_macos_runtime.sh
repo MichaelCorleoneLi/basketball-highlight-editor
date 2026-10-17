@@ -61,7 +61,10 @@ cp "$MODEL" "$OUT/models/bball_model.pt"
 cp "$FFMPEG" "$OUT/bin/ffmpeg"
 cp "$FFPROBE" "$OUT/bin/ffprobe"
 
-"$OUT/python/bin/python3" "$OUT/scripts/check_runtime.py" \
+# 避免把开发机的字节码缓存带入已签名的 App，运行时也不应修改签名资源。
+find "$OUT/engine" "$OUT/src" "$OUT/scripts" -type d -name __pycache__ -prune -exec rm -rf {} +
+
+PYTHONDONTWRITEBYTECODE=1 "$OUT/python/bin/python3" "$OUT/scripts/check_runtime.py" \
   --root "$OUT" \
   --python "$OUT/python/bin/python3" \
   --ffmpeg "$OUT/bin/ffmpeg" \

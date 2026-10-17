@@ -37,7 +37,7 @@ rm -rf "$APP_RUNTIME"
 mkdir -p "$APP_RUNTIME"
 cp -R "$RUNTIME_OUT"/. "$APP_RUNTIME/"
 
-"$RUNTIME_OUT/python/bin/python3" "$APP_RUNTIME/scripts/check_runtime.py" \
+PYTHONDONTWRITEBYTECODE=1 "$RUNTIME_OUT/python/bin/python3" "$APP_RUNTIME/scripts/check_runtime.py" \
   --root "$APP_RUNTIME" \
   --python "$APP_RUNTIME/python/bin/python3" \
   --ffmpeg "$APP_RUNTIME/bin/ffmpeg" \

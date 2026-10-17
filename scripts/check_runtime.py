@@ -18,7 +18,7 @@ REQUIRED_SCRIPTS = (
     "refine_dynamic_candidates.py",
     "refine_candidates.py",
 )
-REQUIRED_IMPORTS = ("cv2", "numpy", "ultralytics", "torch")
+REQUIRED_IMPORTS = ("cv2", "numpy", "ultralytics", "torch", "dill")
 
 
 def _parse_args() -> argparse.Namespace:
@@ -42,6 +42,22 @@ def _check_imports(python_path: str) -> tuple[bool, str]:
         subprocess.run(command, check=True, capture_output=True, text=True)
     except (OSError, subprocess.CalledProcessError) as exc:
         return False, str(exc)
+    return True, "ok"
+
+
+def _check_model_load(python_path: str, model: Path) -> tuple[bool, str]:
+    command = [
+        python_path,
+        "-c",
+        "import sys; from ultralytics import YOLO; YOLO(sys.argv[1])",
+        str(model),
+    ]
+    try:
+        subprocess.run(command, check=True, capture_output=True, text=True)
+    except OSError as exc:
+        return False, str(exc)
+    except subprocess.CalledProcessError as exc:
+        return False, (exc.stderr or exc.stdout or str(exc)).strip()
     return True, "ok"
 
 
@@ -89,6 +105,15 @@ def main() -> int:
         "ok": imports_ok,
         "python": args.python_path,
         "detail": imports_detail,
+    }
+    model_load_ok, model_load_detail = (
+        _check_model_load(args.python_path, model)
+        if model.is_file() and imports_ok
+        else (False, "model or Python dependencies unavailable")
+    )
+    checks["model_load"] = {
+        "ok": model_load_ok,
+        "detail": model_load_detail,
     }
     ffmpeg_ok, ffmpeg_detail = _check_binary(args.ffmpeg, "ffmpeg")
     ffprobe_ok, ffprobe_detail = _check_binary(args.ffprobe, "ffprobe")
