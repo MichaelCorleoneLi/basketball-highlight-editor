@@ -252,6 +252,7 @@ class ProjectNotifier extends Notifier<ProjectState> {
   Future<void> _reviewQueue = Future<void>.value();
   Future<void> _busyOperation = Future<void>.value();
   final Map<String, int> _reviewRevisions = <String, int>{};
+  final Map<String, int> _playerRevisions = <String, int>{};
   bool _disposed = false;
   int _projectLoadGeneration = 0;
   int _noticeCounter = 0;
@@ -1732,8 +1733,9 @@ class ProjectNotifier extends Notifier<ProjectState> {
         ?.toString();
     final existing = findId();
     if (existing != null) return existing;
+    // 不走 `_runBusy`：其他操作进行中时它会直接返回，导致从名单选人被静默丢弃。
     String? playerId;
-    await _runBusy(() async {
+    try {
       final session = ref.read(projectSessionProvider);
       try {
         final created = await session.createPlayer(trimmed);
@@ -1743,9 +1745,13 @@ class ProjectNotifier extends Notifier<ProjectState> {
         if (!error.message.contains('PLAYER_ALREADY_EXISTS')) rethrow;
       }
       final payload = await session.listPlayers();
+      if (_disposed) return null;
       state = state.copyWith(players: _jsonList(payload['players']));
       playerId ??= findId();
-    });
+    } catch (error) {
+      if (!_disposed) _pushNotice(error.toString(), NoticeSeverity.error);
+      return null;
+    }
     return playerId;
   }
 
@@ -1761,26 +1767,76 @@ class ProjectNotifier extends Notifier<ProjectState> {
     return deleted;
   }
 
-  Future<void> setCandidatePlayer(String candidateId, String? playerId) async {
-    await _runBusy(() async {
-      await ref
-          .read(projectSessionProvider)
-          .setCandidatePlayer(candidateId: candidateId, playerId: playerId);
-      await refreshCandidates();
-    });
-  }
+  Future<void> setCandidatePlayer(String candidateId, String? playerId) =>
+      _queueCandidatePlayer(<String>[candidateId], playerId);
 
   Future<void> setCandidatesPlayer(
     List<String> candidateIds,
     String? playerId,
   ) async {
     if (candidateIds.isEmpty) return;
-    await _runBusy(() async {
-      await ref
-          .read(projectSessionProvider)
-          .setCandidatesPlayer(candidateIds: candidateIds, playerId: playerId);
-      _setLocalCandidatePlayer(candidateIds, playerId);
-    }, successMessage: '已更新 ${candidateIds.length} 个片段的球员标签');
+    await _queueCandidatePlayer(
+      candidateIds,
+      playerId,
+      successMessage: '已更新 ${candidateIds.length} 个片段的球员标签',
+    );
+  }
+
+  /// 先在本地更新球员标签让界面立即生效，再排进审核写入队列提交给 Engine；
+  /// 失败时把仍是本次结果的片段回滚。不走 `_runBusy`，避免其他操作进行中时
+  /// 标记被静默丢弃。
+  Future<void> _queueCandidatePlayer(
+    List<String> candidateIds,
+    String? playerId, {
+    String? successMessage,
+  }) {
+    final generation = _projectLoadGeneration;
+    final ids = candidateIds.toSet();
+    final previous = <String, String?>{
+      for (final candidate in state.candidates)
+        if (ids.contains(candidate['id']?.toString()))
+          candidate['id'].toString(): candidate['player_id']?.toString(),
+    };
+    final revisions = <String, int>{
+      for (final id in ids)
+        id: _playerRevisions[id] = (_playerRevisions[id] ?? 0) + 1,
+    };
+    _setLocalCandidatePlayer(candidateIds, playerId);
+    final done = Completer<void>();
+    _reviewQueue = _reviewQueue.then((_) async {
+      try {
+        if (_disposed || generation != _projectLoadGeneration) return;
+        final session = ref.read(projectSessionProvider);
+        if (candidateIds.length == 1) {
+          await session.setCandidatePlayer(
+            candidateId: candidateIds.single,
+            playerId: playerId,
+          );
+        } else {
+          await session.setCandidatesPlayer(
+            candidateIds: candidateIds,
+            playerId: playerId,
+          );
+        }
+        if (successMessage != null && !_disposed) {
+          _pushNotice(successMessage, NoticeSeverity.success);
+        }
+      } catch (error) {
+        if (_disposed || generation != _projectLoadGeneration) return;
+        final previousIds = <String?, List<String>>{};
+        for (final entry in previous.entries) {
+          if (_playerRevisions[entry.key] != revisions[entry.key]) continue;
+          previousIds.putIfAbsent(entry.value, () => <String>[]).add(entry.key);
+        }
+        for (final entry in previousIds.entries) {
+          _setLocalCandidatePlayer(entry.value, entry.key);
+        }
+        _pushNotice(error.toString(), NoticeSeverity.error);
+      } finally {
+        done.complete();
+      }
+    });
+    return done.future;
   }
 
   void _setLocalCandidatePlayer(List<String> candidateIds, String? playerId) {

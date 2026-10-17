@@ -723,7 +723,7 @@ class EngineService:
             return {"path": str(output_path), "time_ms": time_ms}
         output_path.parent.mkdir(parents=True, exist_ok=True)
         temporary_path = output_path.with_name(
-            f".{output_path.stem}.{os.getpid()}.tmp{output_path.suffix}"
+            f".{output_path.stem}.{os.getpid()}.{threading.get_ident()}.tmp{output_path.suffix}"
         )
         command = [
             resolve_media_tool("ffmpeg"), "-y", "-hide_banner", "-loglevel", "error",

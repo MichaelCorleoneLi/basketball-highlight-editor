@@ -576,6 +576,46 @@ def test_jsonl_hello(tmp_path: Path):
     assert "get_active_jobs" in output["payload"]["capabilities"]
 
 
+def test_slow_preview_does_not_block_other_requests():
+    import io
+
+    from engine.python.basketball_engine.server import serve
+
+    release = threading.Event()
+
+    class SlowPreviewService:
+        def handle(self, command, payload):
+            if command == "extract_preview":
+                assert release.wait(5)
+                return {"path": "preview.jpg"}
+            if command == "set_candidate_player":
+                release.set()
+                return {"updated": True}
+            raise AssertionError(command)
+
+    def request(request_id: str, command: str) -> str:
+        return json.dumps(
+            {
+                "protocol_version": "1.0",
+                "type": "request",
+                "request_id": request_id,
+                "command": command,
+                "payload": {},
+            }
+        )
+
+    output = io.StringIO()
+    serve(
+        SlowPreviewService(),
+        [request("preview-1", "extract_preview"), request("tag-1", "set_candidate_player")],
+        output,
+    )
+
+    responses = [json.loads(line) for line in output.getvalue().splitlines()]
+    assert [item["request_id"] for item in responses] == ["tag-1", "preview-1"]
+    assert all(item["ok"] for item in responses)
+
+
 def test_hello_capabilities_match_registered_handlers():
     service = EngineService()
     capabilities = set(service.hello({})["capabilities"])

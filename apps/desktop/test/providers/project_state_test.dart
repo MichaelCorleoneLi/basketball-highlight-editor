@@ -1,3 +1,5 @@
+import 'dart:async';
+
 // test/providers/project_state_test.dart
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -705,6 +707,79 @@ void main() {
     });
   });
 
+  group('ProjectNotifier.setCandidatePlayer', () {
+    ProviderContainer containerFor(_FakeProjectSession fakeSession) {
+      final container = ProviderContainer(
+        overrides: <Override>[
+          projectSessionProvider.overrideWithValue(fakeSession),
+          engineBootstrapProvider.overrideWith(_StubEngineBootstrap.new),
+        ],
+      );
+      addTearDown(container.dispose);
+      return container;
+    }
+
+    _FakeProjectSession seeded() => _FakeProjectSession()
+      ..seedCandidates(<JsonMap>[
+        <String, dynamic>{'id': 'c1', 'review_status': 'pending'},
+      ])
+      ..players = <JsonMap>[
+        <String, dynamic>{'id': 'p1', 'name': '科比'},
+      ];
+
+    test('Engine 返回前就在本地显示球员，且不刷新整个候选列表', () async {
+      final fakeSession = seeded()..setCandidatePlayerGate = Completer<void>();
+      final container = containerFor(fakeSession);
+      final notifier = container.read(projectProvider.notifier);
+      await notifier.refreshCandidates();
+      final listCallsAfterHydration = fakeSession.listCandidatesCalls;
+
+      final pending = notifier.setCandidatePlayer('c1', 'p1');
+      await Future<void>.delayed(Duration.zero);
+
+      final candidate = container.read(projectProvider).candidates.single;
+      expect(candidate['player_id'], 'p1');
+      expect(candidate['player_name'], '科比');
+
+      fakeSession.setCandidatePlayerGate!.complete();
+      await pending;
+      await notifier.flushReviewQueue();
+      expect(fakeSession.setCandidatePlayerCalls, <String>['c1']);
+      expect(fakeSession.listCandidatesCalls, listCallsAfterHydration);
+    });
+
+    test('其他操作忙碌时也不会丢弃标记', () async {
+      final fakeSession = seeded();
+      final container = containerFor(fakeSession);
+      final notifier = container.read(projectProvider.notifier);
+      await notifier.refreshCandidates();
+      notifier.state = notifier.state.copyWith(busy: true);
+
+      await notifier.setCandidatePlayer('c1', 'p1');
+
+      expect(fakeSession.setCandidatePlayerCalls, <String>['c1']);
+      expect(
+        container.read(projectProvider).candidates.single['player_id'],
+        'p1',
+      );
+    });
+
+    test('Engine 写入失败时回滚本地标签并提示', () async {
+      final fakeSession = seeded()
+        ..setCandidatePlayerError = const EngineException('X', '写入失败');
+      final container = containerFor(fakeSession);
+      final notifier = container.read(projectProvider.notifier);
+      await notifier.refreshCandidates();
+
+      await notifier.setCandidatePlayer('c1', 'p1');
+
+      final candidate = container.read(projectProvider).candidates.single;
+      expect(candidate['player_id'], isNull);
+      expect(candidate['player_name'], isNull);
+      expect(container.read(noticeProvider).last.title, contains('写入失败'));
+    });
+  });
+
   group('ProjectNotifier.ensureProjectPlayer', () {
     test('复用同名球员，缺失时创建一次', () async {
       final fakeSession = _FakeProjectSession()
@@ -1025,6 +1100,22 @@ class _FakeProjectSession extends ProjectSession {
   Future<JsonMap> listPlayers() async => <String, dynamic>{
     'players': List<JsonMap>.from(players),
   };
+
+  Completer<void>? setCandidatePlayerGate;
+  Object? setCandidatePlayerError;
+  final List<String> setCandidatePlayerCalls = <String>[];
+
+  @override
+  Future<JsonMap> setCandidatePlayer({
+    required String candidateId,
+    String? playerId,
+  }) async {
+    setCandidatePlayerCalls.add(candidateId);
+    await setCandidatePlayerGate?.future;
+    final error = setCandidatePlayerError;
+    if (error != null) throw error;
+    return <String, dynamic>{'updated': true};
+  }
 
   @override
   Future<JsonMap> setCandidatesPlayer({
