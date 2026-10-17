@@ -13,6 +13,7 @@ import 'package:bhe_l10n/bhe_l10n.dart';
 import '../../components/cs_button.dart';
 import '../../components/cs_empty_state.dart';
 import '../../components/cs_progress_track.dart';
+import '../../providers/player_roster_provider.dart';
 import '../../providers/project_state.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/tokens.dart';
@@ -120,13 +121,45 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
     });
   }
 
+  /// 把选择器里的 id 解析成当前项目的球员 id；名单里的球员按需在项目中创建，
+  /// 并记入常用球员名单。返回 `(ok, id)`，`ok == false` 表示解析失败。
+  Future<(bool, String?)> _resolvePlayerId(
+    ProjectNotifier notifier,
+    String? playerId,
+  ) async {
+    if (playerId == null) return (true, null);
+    String? name;
+    String? resolved = playerId;
+    if (isRosterOnlyPlayerId(playerId)) {
+      name = rosterNameFromPlayerId(playerId);
+      resolved = await notifier.ensureProjectPlayer(name);
+    } else {
+      name = ref
+          .read(projectProvider)
+          .players
+          .cast<Map<String, dynamic>?>()
+          .firstWhere(
+            (player) => player?['id']?.toString() == playerId,
+            orElse: () => null,
+          )?['name']
+          ?.toString();
+    }
+    if (resolved == null) return (false, null);
+    if (name != null) {
+      unawaited(ref.read(playerRosterProvider.notifier).add(name));
+    }
+    return (true, resolved);
+  }
+
   Future<void> _setPlayerForCandidate(
     Map<String, dynamic> candidate,
     ProjectNotifier notifier,
     String? playerId,
   ) async {
     if (!mounted) return;
-    await notifier.setCandidatePlayer(candidate['id'].toString(), playerId);
+    final (ok, resolved) = await _resolvePlayerId(notifier, playerId);
+    if (!mounted || !ok) return;
+    await notifier.setCandidatePlayer(candidate['id'].toString(), resolved);
   }
 
   Future<String?> _promptPlayerName() async {
@@ -149,6 +182,7 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
     if (!mounted || name == null) return;
     final playerId = await notifier.createPlayer(name);
     if (!mounted || playerId == null) return;
+    unawaited(ref.read(playerRosterProvider.notifier).add(name));
     await notifier.setCandidatePlayer(candidate['id'].toString(), playerId);
   }
 
@@ -171,7 +205,9 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
     String? playerId,
   ) async {
     if (_selectedForBatch.isEmpty) return;
-    await notifier.setCandidatesPlayer(_selectedForBatch.toList(), playerId);
+    final (ok, resolved) = await _resolvePlayerId(notifier, playerId);
+    if (!mounted || !ok) return;
+    await notifier.setCandidatesPlayer(_selectedForBatch.toList(), resolved);
     if (mounted) setState(() => _selectedForBatch.clear());
   }
 
@@ -328,15 +364,21 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
     if (!mounted || name == null) return;
     final playerId = await notifier.createPlayer(name);
     if (!mounted || playerId == null) return;
+    unawaited(ref.read(playerRosterProvider.notifier).add(name));
     await _setPlayerForBatch(notifier, playerId);
   }
 
   Future<void> _deletePlayer(String playerId, String playerName) async {
+    final rosterOnly = isRosterOnlyPlayerId(playerId);
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
         title: Text(context.bheText('删除球员？')),
-        content: Text(context.bheText('删除“$playerName”后，已标记的候选会变为未标记。')),
+        content: Text(
+          rosterOnly
+              ? context.bheText('“$playerName”会从常用球员名单中移除。')
+              : context.bheText('删除“$playerName”后，已标记的候选会变为未标记。'),
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(dialogContext, false),
@@ -350,7 +392,15 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
       ),
     );
     if (confirmed != true || !mounted) return;
-    await ref.read(projectProvider.notifier).deletePlayer(playerId);
+    final roster = ref.read(playerRosterProvider.notifier);
+    if (rosterOnly) {
+      await roster.remove(playerName);
+      return;
+    }
+    final deleted = await ref
+        .read(projectProvider.notifier)
+        .deletePlayer(playerId);
+    if (deleted) await roster.remove(playerName);
   }
 
   void _togglePlayback() {
@@ -721,7 +771,7 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
                         _setPlayerForCandidate(candidate, notifier, playerId),
                     onCreatePlayer: (candidate) =>
                         _createPlayerForCandidate(candidate, notifier),
-                    players: state.players,
+                    players: ref.watch(pickerPlayersProvider),
                     batchMode: _batchMode,
                     selectedForBatch: _selectedForBatch,
                     onToggleBatch: _toggleBatchMode,

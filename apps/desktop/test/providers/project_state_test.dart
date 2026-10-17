@@ -705,6 +705,34 @@ void main() {
     });
   });
 
+  group('ProjectNotifier.ensureProjectPlayer', () {
+    test('复用同名球员，缺失时创建一次', () async {
+      final fakeSession = _FakeProjectSession()
+        ..players = <JsonMap>[
+          <String, dynamic>{'id': 'p1', 'name': '科比'},
+        ];
+      final container = ProviderContainer(
+        overrides: <Override>[
+          projectSessionProvider.overrideWithValue(fakeSession),
+          engineBootstrapProvider.overrideWith(_StubEngineBootstrap.new),
+        ],
+      );
+      addTearDown(container.dispose);
+      final notifier = container.read(projectProvider.notifier);
+      await notifier.refreshCandidates();
+
+      expect(await notifier.ensureProjectPlayer(' 科比 '), 'p1');
+      expect(fakeSession.createPlayerCalls, 0);
+
+      expect(await notifier.ensureProjectPlayer('罗斯'), 'p2');
+      expect(fakeSession.createPlayerCalls, 1);
+      expect(
+        container.read(projectProvider).players.map((p) => p['name']),
+        <String>['科比', '罗斯'],
+      );
+    });
+  });
+
   group('ProjectNotifier 错误路径', () {
     test('action 抛错时 push error notice,busy 复位 false', () async {
       final fakeSession = _FakeProjectSession()
@@ -979,6 +1007,24 @@ class _FakeProjectSession extends ProjectSession {
     }
     return <String, dynamic>{};
   }
+
+  int createPlayerCalls = 0;
+
+  @override
+  Future<JsonMap> createPlayer(String name) async {
+    createPlayerCalls++;
+    final player = <String, dynamic>{
+      'id': 'p${players.length + 1}',
+      'name': name,
+    };
+    players = <JsonMap>[...players, player];
+    return <String, dynamic>{'player': player};
+  }
+
+  @override
+  Future<JsonMap> listPlayers() async => <String, dynamic>{
+    'players': List<JsonMap>.from(players),
+  };
 
   @override
   Future<JsonMap> setCandidatesPlayer({

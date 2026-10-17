@@ -115,6 +115,10 @@ String? _translateDynamic(String source) {
   if (deleteCurrent != null) {
     return '“${deleteCurrent.group(1)}” and its review records will be removed from this device.';
   }
+  final removeRosterPlayer = RegExp(r'^“(.+)”会从常用球员名单中移除。$').firstMatch(source);
+  if (removeRosterPlayer != null) {
+    return '“${removeRosterPlayer.group(1)}” will be removed from your saved players.';
+  }
   final deletePlayer = RegExp(r'^删除“(.+)”后，已标记的候选会变为未标记。$').firstMatch(source);
   if (deletePlayer != null) {
     return 'Deleting “${deletePlayer.group(1)}” will clear the tag from marked candidates.';

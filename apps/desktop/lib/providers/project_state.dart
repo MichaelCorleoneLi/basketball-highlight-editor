@@ -1719,6 +1719,36 @@ class ProjectNotifier extends Notifier<ProjectState> {
     return playerId;
   }
 
+  /// 返回当前项目中同名球员的 id，不存在时静默创建（用于常用球员名单）。
+  Future<String?> ensureProjectPlayer(String name) async {
+    final trimmed = name.trim();
+    if (trimmed.isEmpty) return null;
+    String? findId() => state.players
+        .cast<JsonMap?>()
+        .firstWhere(
+          (player) => player?['name']?.toString().trim() == trimmed,
+          orElse: () => null,
+        )?['id']
+        ?.toString();
+    final existing = findId();
+    if (existing != null) return existing;
+    String? playerId;
+    await _runBusy(() async {
+      final session = ref.read(projectSessionProvider);
+      try {
+        final created = await session.createPlayer(trimmed);
+        playerId = (created['player'] as Map?)?['id']?.toString();
+      } on EngineException catch (error) {
+        // 其他窗口或旧数据里可能已有同名球员，刷新列表后按名字取 id。
+        if (!error.message.contains('PLAYER_ALREADY_EXISTS')) rethrow;
+      }
+      final payload = await session.listPlayers();
+      state = state.copyWith(players: _jsonList(payload['players']));
+      playerId ??= findId();
+    });
+    return playerId;
+  }
+
   Future<bool> deletePlayer(String playerId) async {
     var deleted = false;
     await _runBusy(() async {
