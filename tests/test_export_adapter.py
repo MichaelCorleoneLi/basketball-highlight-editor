@@ -1,9 +1,15 @@
+from datetime import date
 from pathlib import Path
 
 import pytest
 
 from engine.python.basketball_engine.adapters.analysis import PipelineCancelled
-from engine.python.basketball_engine.adapters.export import build_clip_command, run_atomic_ffmpeg
+from engine.python.basketball_engine.adapters.export import (
+    build_clip_command,
+    export_goal_clips,
+    run_atomic_ffmpeg,
+    separate_clip_filename,
+)
 
 
 def test_libx264_clip_command_contains_one_video_codec():
@@ -15,6 +21,65 @@ def test_libx264_clip_command_contains_one_video_codec():
 def test_clip_command_rejects_invalid_range():
     with pytest.raises(ValueError, match="INVALID_CLIP_RANGE"):
         build_clip_command(Path("source.mp4"), 1000, 1000, Path("out.mp4"))
+
+
+def test_separate_clip_filename_uses_player_date_and_padded_index():
+    assert separate_clip_filename(
+        {"player_name": "安哥"}, 7, date(2026, 9, 25)
+    ) == "安哥-2026-09-25-007.mp4"
+
+
+def test_separate_clip_filename_uses_unknown_player_and_sanitizes_name():
+    assert separate_clip_filename(
+        {"player_name": None}, 1, date(2026, 9, 25)
+    ) == "未知球员-2026-09-25-001.mp4"
+    assert separate_clip_filename(
+        {"player_name": " A/B:*? "}, 2, date(2026, 9, 25)
+    ) == "A_B___-2026-09-25-002.mp4"
+
+
+def test_separate_export_uses_new_filename_format(tmp_path: Path, monkeypatch):
+    def fake_run(_command, output_path, **_kwargs):
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(b"video")
+
+    monkeypatch.setattr(
+        "engine.python.basketball_engine.adapters.export.run_atomic_ffmpeg",
+        fake_run,
+    )
+    result = export_goal_clips(
+        Path("source.mp4"),
+        [
+            {
+                "player_id": "player-zhang",
+                "player_name": "老张",
+                "event_time_ms": 1000,
+                "review_start_ms": 0,
+                "review_end_ms": 1000,
+            },
+            {
+                "player_name": None,
+                "event_time_ms": 2000,
+                "review_start_ms": 1000,
+                "review_end_ms": 2000,
+            },
+            {
+                "player_id": "player-zhang",
+                "player_name": "老张",
+                "event_time_ms": 3000,
+                "review_start_ms": 2000,
+                "review_end_ms": 3000,
+            },
+        ],
+        tmp_path,
+        "separate",
+    )
+    today = date.today().isoformat()
+    assert [Path(path).name for path in result["files"]] == [
+        f"老张-{today}-001.mp4",
+        f"未知球员-{today}-001.mp4",
+        f"老张-{today}-002.mp4",
+    ]
 
 
 def test_run_atomic_ffmpeg_validates_and_renames_output(tmp_path: Path, monkeypatch):

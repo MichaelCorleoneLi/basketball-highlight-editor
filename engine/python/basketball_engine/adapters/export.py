@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import platform
+import re
 import subprocess
 import time
+import unicodedata
+from datetime import date
 from pathlib import Path
 from typing import Any, Dict
 from uuid import uuid4
@@ -29,6 +32,36 @@ def available_output_path(path: Path) -> Path:
         if not candidate.exists():
             return candidate
     raise OSError(f"无法生成不冲突的导出文件名: {path}")
+
+
+def safe_filename_component(value: Any, fallback: str = "未知球员") -> str:
+    """Return a cross-platform-safe, bounded filename component."""
+    normalized = unicodedata.normalize("NFC", str(value or "")).strip()
+    normalized = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", normalized)
+    normalized = re.sub(r"\s+", " ", normalized).rstrip(" .")
+    if not normalized:
+        normalized = fallback
+    # Windows treats these basenames as devices even when an extension exists.
+    if normalized.upper() in {
+        "CON", "PRN", "AUX", "NUL",
+        *(f"COM{index}" for index in range(1, 10)),
+        *(f"LPT{index}" for index in range(1, 10)),
+    }:
+        normalized = f"_{normalized}"
+    encoded = normalized.encode("utf-8")
+    if len(encoded) > 180:
+        normalized = encoded[:180].decode("utf-8", errors="ignore").rstrip(" .")
+    return normalized or fallback
+
+
+def separate_clip_filename(
+    candidate: Dict[str, Any],
+    index: int,
+    export_date: date | None = None,
+) -> str:
+    player_name = safe_filename_component(candidate.get("player_name"))
+    day = (export_date or date.today()).isoformat()
+    return f"{player_name}-{day}-{index:03d}.mp4"
 
 
 def build_clip_command(
@@ -135,10 +168,30 @@ def export_goal_clips(
     output_dir.mkdir(parents=True, exist_ok=True)
     files: list[Path] = []
     created_files: list[Path] = []
+    export_date = date.today()
+    player_clip_counts: dict[str, int] = {}
     try:
         for index, candidate in enumerate(candidates, 1):
+            if mode == "separate":
+                player_id = candidate.get("player_id")
+                player_name = safe_filename_component(candidate.get("player_name"))
+                player_key = (
+                    f"id:{player_id}"
+                    if player_id
+                    else f"name:{player_name}"
+                )
+                player_number = player_clip_counts.get(player_key, 0) + 1
+                player_clip_counts[player_key] = player_number
+                filename = separate_clip_filename(
+                    candidate, player_number, export_date
+                )
+            else:
+                filename = (
+                    f"goal_{index:03d}_"
+                    f"{candidate['event_time_ms'] / 1000:.2f}s.mp4"
+                )
             path = available_output_path(
-                output_dir / f"goal_{index:03d}_{candidate['event_time_ms'] / 1000:.2f}s.mp4"
+                output_dir / filename
             )
             codec = preferred_video_codec()
             try:
