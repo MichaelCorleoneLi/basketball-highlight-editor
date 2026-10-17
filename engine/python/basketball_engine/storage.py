@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import math
 import shutil
@@ -9,6 +8,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable
 from uuid import uuid4
+
+from .fingerprint import is_sampled, sampled_fingerprint
 
 
 def now_iso() -> str:
@@ -302,13 +303,8 @@ class ProjectStore:
 
     @staticmethod
     def _source_fingerprint(path: str | Path) -> str | None:
-        source = Path(path)
         try:
-            digest = hashlib.sha256()
-            with source.open("rb") as stream:
-                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-                    digest.update(chunk)
-            return f"{source.stat().st_size}:{digest.hexdigest()}"
+            return sampled_fingerprint(path)
         except OSError:
             return None
 
@@ -391,10 +387,12 @@ class ProjectStore:
             "source_size_bytes", "duration_ms", "width",
             "height", "fps", "video_codec", "audio_codec",
         )
+        # 旧库的完整哈希和新的抽样指纹不可比较，此时只按媒体元数据判断。
+        comparable = is_sampled(previous_fingerprint) == is_sampled(next_fingerprint)
         analysis_invalidated = (
             previous_fingerprint is None
             or next_fingerprint is None
-            or previous_fingerprint != next_fingerprint
+            or (comparable and previous_fingerprint != next_fingerprint)
             or any(previous.get(field) != metadata.get(field) for field in fingerprint_fields)
         )
         timestamp = now_iso()

@@ -27,6 +27,7 @@ from .adapters.analysis import (
     terminate_process,
 )
 from .adapters.export import export_goal_clips
+from .fingerprint import is_sampled, sampled_fingerprint
 from .protocol import ProtocolError
 from .storage import ProjectStore, new_id
 from .media_tools import resolve_media_tool
@@ -498,11 +499,7 @@ class EngineService:
 
     @staticmethod
     def _source_fingerprint(path: Path) -> str:
-        digest = hashlib.sha256()
-        with path.open("rb") as stream:
-            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-                digest.update(chunk)
-        return f"{path.stat().st_size}:{digest.hexdigest()}"
+        return sampled_fingerprint(path)
 
     @classmethod
     def _validated_original_source(cls, video: Dict[str, Any]) -> Path:
@@ -522,7 +519,9 @@ class EngineService:
             )
         )
         content_changed = False
-        if isinstance(stored_fingerprint, str) and stored_fingerprint:
+        # 旧库存的是完整 SHA-256，校验它要把整个原视频（常在 NAS 上）读一遍，
+        # 只对抽样指纹做内容比较，旧指纹依赖上面的大小和修改时间检查。
+        if is_sampled(stored_fingerprint):
             try:
                 content_changed = stored_fingerprint != cls._source_fingerprint(source)
             except OSError:
