@@ -53,7 +53,7 @@ BHE（Basketball Highlight Editor）：本地分析篮球比赛视频，找出�
    - 改了 `requirements.txt` 或需要整体重建运行时：`BHE_FULL_RUNTIME=1 BHE_PYTHON_RUNTIME=<便携 Python 目录> scripts/install_macos_app.sh`；
    - `BHE_SKIP_TESTS=1` 跳过测试。
 3. 在 `CHANGELOG.md` 的 `[Unreleased]` 下记一笔。
-4. 提交（Conventional Commits：`feat:` / `fix:` / `docs:` / `chore:` …）。推送到 GitHub 前先征得仓库所有者同意。
+4. 提交（Conventional Commits：`feat:` / `fix:` / `docs:` / `chore:` …）。提交后直接推送到 GitHub（仓库所有者已同意，无需再问）。
 
 ## 本机环境注意事项
 
