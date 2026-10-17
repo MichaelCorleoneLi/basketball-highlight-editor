@@ -87,6 +87,14 @@ mv "$staging" "$TARGET_APP"
 xattr -dr com.apple.quarantine "$TARGET_APP" 2>/dev/null || true
 codesign --verify --deep --strict "$TARGET_APP"
 
+# 只保留 /Applications 这一份：删除构建目录里的副本并从 Launch Services 注销，
+# 否则 Spotlight/启动台会出现两个 BHE，且旧注册可能让图标显示成空白。
+LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
+"$LSREGISTER" -u "$BUILT_APP" >/dev/null 2>&1 || true
+rm -rf "$BUILT_APP"
+"$LSREGISTER" -f "$TARGET_APP" >/dev/null 2>&1 || true
+touch "$TARGET_APP"
+
 version="$(defaults read "$TARGET_APP/Contents/Info.plist" CFBundleShortVersionString 2>/dev/null || echo '?')"
 commit="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo '?')"
 echo "Installed $TARGET_APP (version $version, commit $commit)"
