@@ -129,6 +129,14 @@ flutter build apk --debug
 
 真实视频分析、Android/iOS 原生库、模型输出和最终导出仍需要目标平台手测；单元测试不能替代这些验收。
 
+本机构建并安装桌面版（替换 `/Applications/BHE.app`，每次改动后执行）：
+
+```bash
+scripts/install_macos_app.sh
+```
+
+脚本默认复用 `dist/macos-runtime` 的 Python/FFmpeg/模型并同步当前 Engine 代码；参数说明见脚本头部注释和根目录 `CLAUDE.md`。
+
 ## 5. 调试桌面分析链路
 
 ```text
