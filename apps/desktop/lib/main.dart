@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -51,7 +52,13 @@ Future<void> main() async {
   });
   final container = ProviderContainer();
   // 后台预热 Engine（Python 子进程），打开项目时若已就绪则跳过冷启动。
-  container.read(engineBootstrapProvider.notifier).ensure();
+  unawaited(
+    container.read(engineBootstrapProvider.notifier).ensure().catchError((
+      Object _,
+    ) {
+      // 启动错误保存在 provider 中，具体操作会向用户显示原始错误。
+    }),
+  );
   runApp(
     UncontrolledProviderScope(
       container: container,

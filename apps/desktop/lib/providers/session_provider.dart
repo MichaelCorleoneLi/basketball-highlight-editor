@@ -136,9 +136,10 @@ class EngineBootstrapNotifier extends Notifier<AsyncValue<bool>> {
     final client = ref.read(engineClientProvider);
     client.onUnexpectedExit = _handleUnexpectedExit;
     state = const AsyncValue<bool>.loading();
-    state = await AsyncValue.guard(() async {
+    try {
       final env = Platform.environment;
-      final runtimeRoot = runtimeRootOverride ??
+      final runtimeRoot =
+          runtimeRootOverride ??
           findRuntimeRoot(
             env: env,
             resolvedExecutable: Platform.resolvedExecutable,
@@ -149,8 +150,8 @@ class EngineBootstrapNotifier extends Notifier<AsyncValue<bool>> {
           '未找到本地 Engine 运行目录。开发环境请从项目根目录启动，正式版本请先完成运行时打包。',
         );
       }
-      final pythonPath = pythonExecutableOverride ??
-          findPython(runtimeRoot, env: env);
+      final pythonPath =
+          pythonExecutableOverride ?? findPython(runtimeRoot, env: env);
       final runtimeBin = Directory('$runtimeRoot/bin').existsSync()
           ? '$runtimeRoot/bin'
           : null;
@@ -162,8 +163,11 @@ class EngineBootstrapNotifier extends Notifier<AsyncValue<bool>> {
       );
       await EngineSession(client).hello();
       _restartAttempts = 0;
-      return true;
-    });
+      state = const AsyncValue<bool>.data(true);
+    } catch (error, stackTrace) {
+      state = AsyncValue<bool>.error(error, stackTrace);
+      Error.throwWithStackTrace(error, stackTrace);
+    }
   }
 
   /// 引擎意外退出时自动重启,带次数上限避免崩溃循环。

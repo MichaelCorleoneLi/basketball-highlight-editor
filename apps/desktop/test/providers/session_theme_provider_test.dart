@@ -174,18 +174,25 @@ void main() {
       expect(container.read(engineBootstrapProvider).isLoading, isTrue);
     });
 
-    // ensure() 默认读取真实运行环境；这里仅验证失败状态可以结算。
-    test('ensure() 完结后 state 不再 loading', () async {
+    test('ensure() 将启动失败传给调用方并记录错误状态', () async {
       final container = ProviderContainer(
         overrides: <Override>[
-          engineClientProvider.overrideWithValue(FakeEngineClient()),
+          engineClientProvider.overrideWithValue(
+            FakeEngineClient(startError: Exception('engine start failed')),
+          ),
         ],
       );
       addTearDown(container.dispose);
       final notifier = container.read(engineBootstrapProvider.notifier);
-      await notifier.ensure();
+      await expectLater(
+        notifier.ensure(
+          runtimeRootOverride: Directory.systemTemp.path,
+          pythonExecutableOverride: 'python3',
+        ),
+        throwsA(isA<Exception>()),
+      );
       final state = container.read(engineBootstrapProvider);
-      expect(state.isLoading, isFalse);
+      expect(state.hasError, isTrue);
     });
 
     test('concurrent ensure shares one engine startup', () async {
@@ -195,9 +202,9 @@ void main() {
       final runtimeRoot = Directory.systemTemp.createTempSync(
         'engine_bootstrap_test_',
       );
-      Directory('${runtimeRoot.path}/engine/python').createSync(
-        recursive: true,
-      );
+      Directory(
+        '${runtimeRoot.path}/engine/python',
+      ).createSync(recursive: true);
       addTearDown(() => runtimeRoot.deleteSync(recursive: true));
       final container = ProviderContainer(
         overrides: <Override>[engineClientProvider.overrideWithValue(client)],
@@ -266,9 +273,10 @@ void main() {
 }
 
 class FakeEngineClient extends EngineClient {
-  FakeEngineClient({this.startDelay = Duration.zero});
+  FakeEngineClient({this.startDelay = Duration.zero, this.startError});
 
   final Duration startDelay;
+  final Exception? startError;
   int startCalls = 0;
   int helloCalls = 0;
   bool running = false;
@@ -285,6 +293,8 @@ class FakeEngineClient extends EngineClient {
   }) async {
     startCalls++;
     await Future<void>.delayed(startDelay);
+    final error = startError;
+    if (error != null) throw error;
     running = true;
   }
 
