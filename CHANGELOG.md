@@ -6,6 +6,7 @@
 
 ### Added
 
+- 进球检测改进评估：基于 12 个已审核项目统计误检来源，试跑本机 qwen3-vl 复核，给出改进顺序（`docs/research/MADE_BASKET_DETECTION_REVIEW_20261021.md`）；
 - 桌面端常用球员名单：添加过的球员跨视频、跨重启保留，在审核页选择球员时直接可选，可在选择器中删除（`docs/PLAYER_ROSTER.md`）；
 - `scripts/install_macos_app.sh`：本机测试、构建 Release 版并替换 `/Applications/BHE.app`；
 - 根目录 `CLAUDE.md`：架构速览、关键文件、构建安装流程和本机环境注意事项；
