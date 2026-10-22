@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 import refine_dynamic_candidates
-from refine_dynamic_candidates import build_scan_windows, file_fingerprint, scale_rim
+from refine_dynamic_candidates import anchor_net_roi, build_scan_windows, file_fingerprint, scale_rim
 import scan_video
 from export_review_queue import concat_manifest_entry
 
@@ -20,6 +20,22 @@ class RefineDynamicTest(unittest.TestCase):
         self.assertEqual([item["indices"] for item in result], [[0, 1], [2]])
         self.assertAlmostEqual(result[0]["start"], 7.5)
         self.assertAlmostEqual(result[0]["end"], 14.5)
+
+
+def test_anchor_net_roi_keeps_box_that_covers_rim():
+    rim = {"center_x": 1250.0, "rim_y": 345.0, "width": 60.0}
+    assert anchor_net_roi([1226, 338, 1284, 370], rim) == [1226, 338, 1284, 370]
+
+
+def test_anchor_net_roi_follows_rim_after_camera_moves():
+    # Net box drawn on the first frame; the camera then moved ~90px left.
+    rim = {"center_x": 1157.0, "rim_y": 347.0, "width": 61.0}
+    assert anchor_net_roi([1226, 338, 1284, 370], rim) == [1128, 338, 1186, 370]
+
+
+def test_anchor_net_roi_without_box_or_rim_is_unchanged():
+    assert anchor_net_roi(None, {"center_x": 1.0, "rim_y": 1.0}) is None
+    assert anchor_net_roi([1, 2, 3, 4], None) == [1, 2, 3, 4]
 
 
 def test_main_does_not_load_yolo_when_all_detection_caches_hit(tmp_path, monkeypatch):
@@ -48,7 +64,7 @@ def test_main_does_not_load_yolo_when_all_detection_caches_hit(tmp_path, monkeyp
         "batch": 8,
         "rim": scaled_rim,
         "net_roi": None,
-        "signal_version": 4,
+        "signal_version": 5,
     }, sort_keys=True).encode()
     cache_dir.mkdir()
     (cache_dir / (refine_dynamic_candidates.hashlib.sha256(cache_key).hexdigest()[:24] + ".json")).write_text(

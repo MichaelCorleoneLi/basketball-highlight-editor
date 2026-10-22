@@ -19,7 +19,7 @@ if _SRC_PATH.is_dir() and str(_SRC_PATH) not in sys.path:
     sys.path.insert(0, str(_SRC_PATH))
 
 from basketball_highlight.review_reason import suggest_review_reasons
-from basketball_highlight.ranking import dedupe_candidates
+from basketball_highlight.ranking import candidate_priority, dedupe_candidates
 
 
 class PipelineCancelled(Exception):
@@ -135,6 +135,55 @@ def flatten_coarse_matches(data: Dict[str, Any], dedupe_seconds: float = 2.0) ->
     return dedupe_candidates(matches, dedupe_seconds)
 
 
+# 同一个进球常同时产生精扫和粗扫候选，粗扫时间会偏 2~5 秒；片段前后
+# 各留数秒，两个候选会剪出同一个球。同一篮筐 5 秒内不会有两次进球。
+SAME_SHOT_SECONDS = 5.0
+# 合并后的片段最多跨越这么久，避免连续的补篮/拼抢串成一个超长片段。
+MAX_MERGED_SPAN_SECONDS = 10.0
+
+
+def merge_same_shot_matches(
+    matches: list[Dict[str, Any]],
+    merge_seconds: float = SAME_SHOT_SECONDS,
+) -> list[Dict[str, Any]]:
+    """Merge candidates that would cut the same shot into one clip.
+
+    The strongest candidate (refined over coarse, made over ambiguous) keeps
+    its event time. ``clip_start_time``/``clip_end_time`` record the earliest
+    and latest merged event so the clip still covers every merged moment,
+    and no basket is lost when a miss and its putback merge.
+    """
+    merged: list[Dict[str, Any]] = []
+    for match in sorted(matches, key=lambda item: float(item["time"])):
+        time_value = float(match["time"])
+        if (
+            merged
+            and time_value - float(merged[-1]["clip_end_time"]) <= merge_seconds
+            and time_value - float(merged[-1]["clip_start_time"]) <= MAX_MERGED_SPAN_SECONDS
+        ):
+            current = merged[-1]
+            start = float(current["clip_start_time"])
+            winner = match if candidate_priority(match) > candidate_priority(current) else current
+            merged[-1] = {
+                **winner,
+                "clip_start_time": start,
+                "clip_end_time": time_value,
+                "merged_times": [*current["merged_times"], time_value],
+            }
+            continue
+        merged.append({
+            **match,
+            "clip_start_time": time_value,
+            "clip_end_time": time_value,
+            "merged_times": [time_value],
+        })
+    for match in merged:
+        if len(match["merged_times"]) == 1:
+            for key in ("clip_start_time", "clip_end_time", "merged_times"):
+                match.pop(key)
+    return merged
+
+
 def candidate_to_row(
     match: Dict[str, Any],
     video_id: str,
@@ -146,8 +195,10 @@ def candidate_to_row(
     analysis_source: str | None = None,
 ) -> Dict[str, Any]:
     event_time_ms = round(float(match["time"]) * 1000)
-    start_ms = max(0, event_time_ms - round(before_seconds * 1000))
-    end_ms = min(duration_ms, event_time_ms + round(after_seconds * 1000))
+    clip_start_ms = round(float(match.get("clip_start_time", match["time"])) * 1000)
+    clip_end_ms = round(float(match.get("clip_end_time", match["time"])) * 1000)
+    start_ms = max(0, min(event_time_ms, clip_start_ms) - round(before_seconds * 1000))
+    end_ms = min(duration_ms, max(event_time_ms, clip_end_ms) + round(after_seconds * 1000))
     timestamp = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
     evidence = dict(match)
     if analysis_source:

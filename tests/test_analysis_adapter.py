@@ -11,6 +11,7 @@ from engine.python.basketball_engine.adapters.analysis import (
     candidate_to_row,
     flatten_coarse_matches,
     flatten_refined_matches,
+    merge_same_shot_matches,
     scale_roi_to_proxy,
     run_pipeline,
 )
@@ -353,3 +354,32 @@ def test_run_pipeline_ignores_manifest_from_another_algorithm_version(tmp_path: 
 
     assert result["cache_hits"] == 0
     assert result["refined"] == {"results": []}
+
+
+def test_merge_same_shot_keeps_refined_and_covers_both_times():
+    matches = [
+        {"time": 74.79, "verdict": "ambiguous", "score": 0.7},
+        {"time": 77.10, "coarse_crossing": True, "score": 0.4},
+        {"time": 118.08, "verdict": "ambiguous", "score": 0.8},
+    ]
+
+    merged = merge_same_shot_matches(matches)
+
+    assert [item["time"] for item in merged] == [74.79, 118.08]
+    assert merged[0]["clip_start_time"] == 74.79
+    assert merged[0]["clip_end_time"] == 77.10
+    assert "clip_start_time" not in merged[1]
+    row = candidate_to_row(merged[0], "v", "r", 300_000, 6, 3, "test")
+    assert (row["event_time_ms"], row["default_start_ms"], row["default_end_ms"]) == (
+        74790, 68790, 80100,
+    )
+
+
+def test_merge_same_shot_caps_merged_span():
+    matches = [{"time": float(t), "score": 0.5} for t in (10, 14, 18, 22)]
+
+    merged = merge_same_shot_matches(matches)
+
+    assert [item["time"] for item in merged] == [10.0, 22.0]
+    assert merged[0]["merged_times"] == [10.0, 14.0, 18.0]
+    assert "merged_times" not in merged[1]

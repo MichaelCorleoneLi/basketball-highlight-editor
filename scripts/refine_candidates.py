@@ -68,6 +68,9 @@ def select_device(requested):
     return "mps" if torch.backends.mps.is_available() else "cpu"
 
 
+OCCLUSION_CHANGED_RATIO = 0.45
+
+
 def _clamp01(value):
     return max(0.0, min(1.0, float(value)))
 
@@ -186,6 +189,24 @@ def scan_window(
         signal_y2 = max(bounds[3] for bounds in signal_bounds)
     else:
         signal_x1 = signal_x2 = signal_y1 = signal_y2 = 0
+
+    # A wide box around the net. When most of it changes between samples,
+    # something large (usually a person walking past the camera) covers the
+    # hoop, and the net zones would report motion that is not the net.
+    frame_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or x2)
+    frame_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or y2)
+    if net_x2 > net_x1 and net_y2 > net_y1:
+        pad_x = net_x2 - net_x1
+        pad_y = net_y2 - net_y1
+        occlusion_bounds = (
+            max(0, net_x1 - pad_x),
+            max(0, net_y1 - pad_y),
+            min(frame_w, net_x2 + pad_x),
+            min(frame_h, net_y2 + pad_y),
+        )
+    else:
+        occlusion_bounds = None
+    previous_context = None
 
     pending_crops = []
     pending_meta = []
@@ -307,6 +328,15 @@ def scan_window(
                 zone_values[f"net_{zone_name}_downward_motion_score"] = round(downward_motion, 4)
                 signals.append(max(gray_motion, white_motion, downward_motion))
                 signals.append(orange_motion)
+            if occlusion_bounds:
+                ox1, oy1, ox2, oy2 = occlusion_bounds
+                context = cv2.cvtColor(frame[oy1:oy2, ox1:ox2], cv2.COLOR_BGR2GRAY)
+                if previous_context is not None and previous_context.shape == context.shape:
+                    occluded_ratio = float((cv2.absdiff(previous_context, context) > 25).mean())
+                    zone_values["net_occlusion_ratio"] = round(occluded_ratio, 4)
+                    if occluded_ratio >= OCCLUSION_CHANGED_RATIO:
+                        zone_measurements_valid = False
+                previous_context = context
             zone_values["net_measurement_valid"] = zone_measurements_valid
             zone_values["net_whole_signal_score"] = round(
                 _clamp01(max(signals, default=0.0)), 4,

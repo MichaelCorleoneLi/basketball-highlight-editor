@@ -244,14 +244,18 @@ def _multi_signal_features(records, event_time):
     }
 
 
-def _zone_signal_value(record, zone):
-    return max(
+def _zone_signal_components(record, zone):
+    return (
         float(record.get(f"net_{zone}_motion_score", 0.0)),
         float(record.get(f"net_{zone}_orange_score", 0.0)),
         float(record.get(f"net_{zone}_white_motion_score", 0.0)),
         float(record.get(f"net_{zone}_downward_motion_score", 0.0)),
         min(1.0, float(record.get(f"net_{zone}_changed_ratio", 0.0)) / 0.12),
     )
+
+
+def _zone_signal_value(record, zone):
+    return max(_zone_signal_components(record, zone))
 
 
 def _net_inside_motion_features(records, event_time):
@@ -273,12 +277,31 @@ def _net_inside_motion_features(records, event_time):
     ]
     signal_available = len(active) >= 2 and len(baseline) >= 1
     baseline_by_zone = {}
+    component_baselines = {}
     for zone in ("upper", "lower", "below"):
         values = [_zone_signal_value(record, zone) for record in baseline]
         baseline_by_zone[zone] = median(values) if values else 0.0
+        components = [_zone_signal_components(record, zone) for record in baseline]
+        component_baselines[zone] = (
+            [median(column) for column in zip(*components)]
+            if components else [0.0] * 5
+        )
 
     def activated_value(record, zone):
-        return max(0.0, _zone_signal_value(record, zone) - baseline_by_zone[zone])
+        # Subtract each signal's own baseline. A signal that is saturated
+        # before the shot (bright backboard glare makes the white-net signal
+        # read 1.0 in every frame) then contributes nothing, instead of
+        # hiding a clear rise in the other signals.
+        return max(
+            0.0,
+            *(
+                value - base
+                for value, base in zip(
+                    _zone_signal_components(record, zone),
+                    component_baselines[zone],
+                )
+            ),
+        )
 
     threshold = 0.25
     lower_peak = max((activated_value(record, "lower") for record in active), default=0.0)

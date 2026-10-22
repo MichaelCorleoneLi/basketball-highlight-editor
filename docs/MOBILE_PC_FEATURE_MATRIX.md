@@ -45,7 +45,7 @@
 | 反弹判断 | 完整 post-track、深度边界、横向离开和恢复分支 | 已实现近筐回升、横向离开和恢复语义；跨轨拼接策略仍较简化 | `架构不一致` | 输入轨迹不同仍会影响 missed 与 ambiguous 分布 |
 | 候选评分 | `_score_crossing`、calibrated gates、预测融合、去重 | 已对齐 `_score_crossing`、calibrated gates、verdict、自动导出条件和去重优先级；回放比较字段固定 | `部分对齐` | 端内 composite score 仍受检测轨迹和网测量差异影响，不能直接跨端排序 |
 | 候选去重/合并 | 精筛后 `dedupe_candidates`，默认 2 秒 | 事件时间 2 秒内去重，并按相同优先级选择胜者 | `部分对齐` | Rust 没有桌面端的 `rim_source` 分层，移动端候选来源固定 |
-| 算法版本 | `python-v2.14-white-net-trajectory` 写入 job / detector / export | Candidate 与 replay 使用 `analysis-contract-v1` | `部分对齐` | 移动端仍需在项目包中补充运行时/模型构建信息 |
+| 算法版本 | `python-v2.15-net-follows-rim` 写入 job / detector / export | Candidate 与 replay 使用 `analysis-contract-v1` | `部分对齐` | 移动端仍需在项目包中补充运行时/模型构建信息 |
 | 轨迹可视化数据 | 轨迹、穿框、预测、signals、gates、verification | 轨迹、穿框、预测点、signals、gates、verification | `移动端部分` | 字段已覆盖；移动端 UI 尚未完整呈现所有证据，网动原始测量也不同 |
 
 **结论：移动端决策层已按桌面契约收敛，但视频检测与篮网测量仍不是数值等价实现。** 后续变更遵循 [`CROSS_PLATFORM_ANALYSIS_CONTRACT_V1.md`](architecture/CROSS_PLATFORM_ANALYSIS_CONTRACT_V1.md)，必须在已有 5 分钟、30 分钟、1 小时样本上完成回放后，才能宣称候选结果一致。

@@ -15,7 +15,7 @@ from cache_io import read_json_cache, write_json_cache
 
 
 DETECTION_CACHE_VERSION = "python-v2.5-white-net-region"
-ALGORITHM_VERSION = "python-v2.14-white-net-trajectory"
+ALGORITHM_VERSION = "python-v2.15-net-follows-rim"
 REFINED_SCHEMA_VERSION = 3
 
 
@@ -145,6 +145,31 @@ def build_scan_windows(centers, window, rims=None):
     return groups
 
 
+def anchor_net_roi(net_roi, rim):
+    """Move the user's net box onto the rim found in this window.
+
+    The net box is drawn once on an early frame. If the camera is nudged
+    afterwards, a fixed box measures empty background and every candidate
+    loses its net signal. Keep the box size and its offset from the rim
+    plane, but follow the tracked rim when the box no longer covers it.
+    """
+    if not net_roi or not rim:
+        return net_roi
+    x1, y1, x2, y2 = [float(value) for value in net_roi]
+    width = max(1.0, x2 - x1)
+    height = max(1.0, y2 - y1)
+    dx = float(rim["center_x"]) - (x1 + x2) / 2.0
+    rim_y = float(rim["rim_y"])
+    dy = 0.0
+    if rim_y < y1 - height or rim_y > y2:
+        dy = rim_y - y1
+    if abs(dx) <= 0.25 * width and dy == 0.0:
+        return net_roi
+    if abs(dx) <= 0.25 * width:
+        dx = 0.0
+    return [round(x1 + dx), round(y1 + dy), round(x2 + dx), round(y2 + dy)]
+
+
 def _records_for_rim(records, scan_rim, decision_rim):
     if _net_compatible_rims(scan_rim, decision_rim):
         return records
@@ -219,6 +244,7 @@ def main(args):
     print("progress=0.0", flush=True)
     records_by_index = {}
     rims_by_index = {}
+    net_rois_by_index = {}
     cache_paths_by_index = {}
     legacy_cache_paths_by_index = {}
     missing_indices = []
@@ -229,6 +255,7 @@ def main(args):
             raise ValueError("Coarse candidate is missing rim calibration")
         rim = scale_rim(proxy_rim, args.proxy_scale)
         rims_by_index[index] = (rim, scale_rim(proxy_rim, args.proxy_scale, correct_plane=False))
+        net_rois_by_index[index] = anchor_net_roi(args.net_roi, rim)
         cache_path = None
         if args.cache_dir:
             cache_key = json.dumps({
@@ -244,8 +271,8 @@ def main(args):
                 "conf": args.conf,
                 "batch": args.batch,
                 "rim": rim,
-                "net_roi": args.net_roi,
-                "signal_version": 4,
+                "net_roi": net_rois_by_index[index],
+                "signal_version": 5,
             }, sort_keys=True).encode()
             # 文件名截断到 24 位避免 Windows MAX_PATH 超限(见 scan_video)。
             cache_path = args.cache_dir / (
@@ -296,7 +323,7 @@ def main(args):
             args.batch,
             start_time_override=group["start"],
             end_time_override=group["end"],
-            net_roi=args.net_roi,
+            net_roi=net_rois_by_index[group_indices[0]],
         )
         for index in group_indices:
             center = float(candidates[index]["time"])

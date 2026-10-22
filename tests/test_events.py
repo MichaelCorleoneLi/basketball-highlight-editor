@@ -33,6 +33,24 @@ class EventsTest(unittest.TestCase):
         self.assertLess(signals["net_lower_peak"], 0.12)
         self.assertLess(signals["net_below_peak"], 0.12)
 
+    def test_saturated_white_signal_does_not_hide_changed_ratio_rise(self):
+        def record(time, ratio):
+            return {
+                "time": time, "net_measurement_valid": True,
+                "net_lower_white_motion_score": 1.0, "net_below_white_motion_score": 1.0,
+                "net_lower_changed_ratio": ratio, "net_below_changed_ratio": ratio,
+            }
+
+        records = [
+            record(0.3, 0.03), record(0.4, 0.04), record(0.5, 0.03),
+            record(1.0, 0.04), record(1.1, 0.30), record(1.2, 0.45),
+        ]
+
+        signals = _net_inside_motion_features(records, 1.0)
+
+        self.assertGreater(signals["net_lower_peak"], 0.5)
+        self.assertGreater(signals["net_inside_motion_score"], 0.5)
+
     def test_normalized_gate_preserves_geometry_across_rim_scale(self):
         small = {
             "speed_px_s": 60.0,

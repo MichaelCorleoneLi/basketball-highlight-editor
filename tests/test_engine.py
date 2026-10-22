@@ -2372,7 +2372,7 @@ def test_coarse_overlay_uses_nearest_ball_independent_of_detection_order():
 
 
 def test_tracking_association_has_a_new_consistent_algorithm_version():
-    assert ANALYSIS_ALGORITHM_VERSION == "python-v2.14-white-net-trajectory"
+    assert ANALYSIS_ALGORITHM_VERSION == "python-v2.15-net-follows-rim"
     assert refine_dynamic_candidates.ALGORITHM_VERSION == ANALYSIS_ALGORITHM_VERSION
 
 

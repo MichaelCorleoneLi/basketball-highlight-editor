@@ -2,7 +2,7 @@
 
 > 状态：当前实现基准
 > 生效日期：2026-08-28
-> 基准端：桌面 Python Engine（`python-v2.14-white-net-trajectory`）
+> 基准端：桌面 Python Engine（`python-v2.15-net-follows-rim`）
 
 ## 目标与边界
 

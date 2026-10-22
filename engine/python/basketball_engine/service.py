@@ -20,6 +20,7 @@ from .adapters.analysis import (
     build_pipeline_commands,
     candidate_to_row,
     flatten_coarse_matches,
+    merge_same_shot_matches,
     flatten_refined_matches,
     PipelineCancelled,
     run_pipeline,
@@ -34,7 +35,7 @@ from .media_tools import resolve_media_tool
 from basketball_highlight.tracking import link_ball_detections
 
 
-ANALYSIS_ALGORITHM_VERSION = "python-v2.14-white-net-trajectory"
+ANALYSIS_ALGORITHM_VERSION = "python-v2.15-net-follows-rim"
 
 
 class EngineService:
@@ -1466,6 +1467,7 @@ class EngineService:
                         extra["overlay"] = overlay
                     matches.append(extra)
                 matches.sort(key=lambda match: float(match["time"]))
+            matches = merge_same_shot_matches(matches)
             detection_counts = self._detection_counts(coarse_detections)
             rows = [
                 candidate_to_row(
