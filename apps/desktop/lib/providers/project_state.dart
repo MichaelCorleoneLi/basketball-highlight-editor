@@ -492,7 +492,10 @@ class ProjectNotifier extends Notifier<ProjectState> {
       }
       final session = ref.read(projectSessionProvider);
       final roi = _draftRect(draft['roi']);
-      if (roi == null) {
+      final savedMode = draft['analysis_mode']?.toString();
+      final mode = savedMode == 'fast' ? 'fast' : 'standard';
+      // 标准模式由 Engine 自动跟踪篮筐，检测区域可以不设。
+      if (roi == null && mode == 'fast') {
         throw const SessionStateException('请先设置投篮分析区');
       }
       final range = (draft['analysis_range'] as Map?)?.cast<String, dynamic>();
@@ -538,16 +541,16 @@ class ProjectNotifier extends Notifier<ProjectState> {
           'y2': mappedNet.bottom * nextHeight,
         };
       }
-      await session.saveRoi(
-        x1: mappedRoi.left * nextWidth,
-        y1: mappedRoi.top * nextHeight,
-        x2: mappedRoi.right * nextWidth,
-        y2: mappedRoi.bottom * nextHeight,
-        calibration: calibration,
-      );
+      if (mappedRoi != null) {
+        await session.saveRoi(
+          x1: mappedRoi.left * nextWidth,
+          y1: mappedRoi.top * nextHeight,
+          x2: mappedRoi.right * nextWidth,
+          y2: mappedRoi.bottom * nextHeight,
+          calibration: calibration,
+        );
+      }
       await session.clearWorkflowDraft();
-      final savedMode = draft['analysis_mode']?.toString();
-      final mode = savedMode == 'fast' ? 'fast' : 'standard';
       await session.setAnalysisMode(mode);
       state = state.copyWith(
         video: rangedVideo ?? video,

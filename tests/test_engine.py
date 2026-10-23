@@ -1270,13 +1270,13 @@ def test_roi_is_required_before_analysis(tmp_path: Path):
             "audio_codec": "aac",
         }
     )
-    payload = {"project_root": str(project_root), "video_id": video["id"]}
+    payload = {"project_root": str(project_root), "video_id": video["id"], "mode": "fast"}
     try:
         service._create_analysis_job(payload)
     except Exception as exc:
         assert "ROI" in str(exc)
     else:
-        raise AssertionError("analysis must require ROI")
+        raise AssertionError("fast analysis must require ROI")
     service.handle("save_roi", {**payload, "x1": 10, "y1": 20, "x2": 100, "y2": 120})
     job = service._create_analysis_job(payload)["job"]
     assert job["state"] == "queued"
@@ -2389,3 +2389,60 @@ def test_coarse_overlay_rejects_incomplete_crossing_points():
     )
 
     assert overlay is None
+
+
+def test_standard_analysis_needs_no_roi(tmp_path: Path):
+    project_root = tmp_path / "project"
+    service = EngineService()
+    service.handle("create_project", {"name": "自动篮筐", "root_path": str(project_root)})
+    store = ProjectStore(project_root)
+    video = store.link_video({
+        "source_path": str(tmp_path / "source.mp4"), "source_size_bytes": 1, "source_mtime_ns": 1,
+        "duration_ms": 1000, "width": 1920, "height": 1080, "fps": 30.0,
+        "video_codec": "h264", "audio_codec": "aac",
+    })
+    job = service._create_analysis_job({
+        "project_root": str(project_root), "video_id": video["id"], "mode": "standard",
+    })["job"]
+    assert job["state"] == "queued"
+
+
+def test_standard_analysis_turns_rim_events_into_candidates_and_saves_auto_roi(tmp_path: Path, monkeypatch):
+    service, store, video, model = _analysis_fixture(tmp_path)
+    with store.connect() as connection:
+        connection.execute("DELETE FROM rois")
+    scan = {
+        "hoop_bbox": [400, 200, 460, 240],
+        "width": 960,
+        "height": 720,
+        "events": [
+            {"time": 5.0, "make_probability": 0.92, "features": {"hoop_h_range": 0.7},
+             "hoop_source": {"center_x": 430, "top": 200, "width": 60, "height": 40}},
+            {"time": 7.0, "make_probability": 0.40, "features": {},
+             "hoop_source": {"center_x": 430, "top": 200, "width": 60, "height": 40}},
+            {"time": 15.0, "make_probability": 0.10, "features": {},
+             "hoop_source": {"center_x": 430, "top": 200, "width": 60, "height": 40}},
+        ],
+    }
+    commands = []
+
+    def fake_run(command_list, output, *args, **kwargs):
+        commands.append((command_list, kwargs.get("stage_names")))
+        return {"refined": scan, "logs": [], "stage_timings_ms": {"rim_scan": 1}}
+
+    monkeypatch.setattr("engine.python.basketball_engine.service.run_pipeline", fake_run)
+    monkeypatch.setattr(service, "_prepare_candidate_previews", lambda **_: {"generated": 0, "reused": 0, "failed": 0})
+    payload = {"project_root": str(store.root), "video_id": video["id"], "model_path": str(model), "mode": "standard"}
+    job = service._create_analysis_job(payload)["job"]
+    service._run_analysis(payload, job["id"])
+
+    finished = store.get_job(job["id"])
+    assert finished["state"] == "completed", finished
+    assert commands[0][1] == ["rim_scan"]
+    assert any("rim_scan.py" in part for part in commands[0][0][0])
+    candidates = store.list_candidates(video["id"])
+    # 5 s and 7 s are one shot; 15 s is below the make threshold.
+    assert [c["event_time_ms"] for c in candidates] == [5000]
+    assert candidates[0]["default_end_ms"] == 10000
+    roi = store.active_roi(video["id"])
+    assert roi["calibration"]["source"] == "rim_scan"

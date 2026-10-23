@@ -12,6 +12,7 @@ from engine.python.basketball_engine.adapters.analysis import (
     flatten_coarse_matches,
     flatten_refined_matches,
     merge_same_shot_matches,
+    rim_events_to_matches,
     scale_roi_to_proxy,
     run_pipeline,
 )
@@ -383,3 +384,18 @@ def test_merge_same_shot_caps_merged_span():
     assert [item["time"] for item in merged] == [10.0, 22.0]
     assert merged[0]["merged_times"] == [10.0, 14.0, 18.0]
     assert "merged_times" not in merged[1]
+
+
+def test_rim_events_to_matches_keeps_likely_makes_with_rim_overlay():
+    scan = {"events": [
+        {"time": 10.0, "make_probability": 0.9, "features": {"a": 1},
+         "hoop_source": {"center_x": 1200, "top": 340, "width": 60, "height": 45}},
+        {"time": 20.0, "make_probability": 0.2, "features": {}, "hoop_source": {}},
+    ]}
+
+    matches = rim_events_to_matches(scan)
+
+    assert len(matches) == 1
+    assert matches[0]["verdict"] == "made"
+    assert matches[0]["confidence"] == "high"
+    assert matches[0]["overlay"]["rim"] == {"center_x": 1200, "rim_y": 340, "width": 60, "height": 45}

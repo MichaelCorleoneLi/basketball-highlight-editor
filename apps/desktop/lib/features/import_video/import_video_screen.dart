@@ -456,16 +456,21 @@ class _ImportVideoScreenState extends ConsumerState<ImportVideoScreen> {
     await _persistDraft(step: next);
   }
 
+  /// 标准模式由 Engine 自动跟踪篮筐，不需要手动框选检测区域。
+  bool get _roiOptional => _analysisMode != 'fast';
+
+  bool get _canStartAnalysis => _roi != null || _roiOptional;
+
   bool _canLeaveStep(int step) {
     final state = ref.read(projectProvider);
     if (step == 0) return state.video != null;
-    if (step == 2) return _roi != null;
+    if (step == 2) return _canStartAnalysis;
     return true;
   }
 
   Future<void> _applyAndAnalyze() async {
     final state = ref.read(projectProvider);
-    if (state.video == null || _roi == null || _applying) return;
+    if (state.video == null || !_canStartAnalysis || _applying) return;
     if (state.candidates.isNotEmpty && mounted) {
       final confirmed = await showDialog<bool>(
         context: context,
@@ -573,7 +578,7 @@ class _ImportVideoScreenState extends ConsumerState<ImportVideoScreen> {
         index: '03',
         title: l10n?.detectRegionStep ?? '检测区域',
         icon: LucideIcons.target,
-        completed: _roi != null,
+        completed: _roi != null || _roiOptional,
       ),
       (
         index: '04',
@@ -713,6 +718,14 @@ class _ImportVideoScreenState extends ConsumerState<ImportVideoScreen> {
                       label: Text(l10n?.returnAction ?? '上一步'),
                     ),
                   const Spacer(),
+                  if (_step >= 1 && _step < _stepCount - 1 && _roiOptional) ...[
+                    TextButton.icon(
+                      onPressed: busy || _applying ? null : _applyAndAnalyze,
+                      icon: const Icon(Icons.auto_awesome_rounded, size: 17),
+                      label: Text(context.bheText('直接自动分析')),
+                    ),
+                    const SizedBox(width: Spacing.sm),
+                  ],
                   if (_step < _stepCount - 1)
                     CsButton(
                       label: Text(l10n?.nextStep ?? '下一步'),
@@ -724,7 +737,7 @@ class _ImportVideoScreenState extends ConsumerState<ImportVideoScreen> {
                       label: Text(l10n?.confirmAndStartAnalysis ?? '确认配置并开始分析'),
                       icon: LucideIcons.play,
                       isLoading: _applying,
-                      onPressed: busy || _roi == null ? null : _applyAndAnalyze,
+                      onPressed: busy || !_canStartAnalysis ? null : _applyAndAnalyze,
                     ),
                 ],
               ),

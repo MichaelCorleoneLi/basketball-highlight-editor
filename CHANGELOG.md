@@ -6,6 +6,9 @@
 
 ### Added
 
+- 标准分析模式改为自动识别：不再需要手动框检测区域和篮网，Engine 全程跟踪篮筐，找出每次“球到篮筐”并用进球模型打分（`scripts/rim_scan.py`、`src/basketball_highlight/rim_events.py`）。在 9 个已标注视频上，需要审核的片段从 395 个降到 172 个，覆盖 95% 的已标进球，另外找回约 10 个旧版漏掉的进球（`docs/research/RIM_EVENTS_MODEL_20261023.md`）；
+- 导入配置页新增“直接自动分析”，选完视频和分析范围即可开始；
+- `scripts/train_make_model.py`：用审核标签重训进球模型并给出交叉验证结果；
 - 进球检测改进评估：基于 12 个已审核项目统计误检来源，试跑本机 qwen3-vl 复核，给出改进顺序（`docs/research/MADE_BASKET_DETECTION_REVIEW_20261021.md`）；
 - 桌面端常用球员名单：添加过的球员跨视频、跨重启保留，在审核页选择球员时直接可选，可在选择器中删除（`docs/PLAYER_ROSTER.md`）；
 - `scripts/install_macos_app.sh`：本机测试、构建 Release 版并替换 `/Applications/BHE.app`；

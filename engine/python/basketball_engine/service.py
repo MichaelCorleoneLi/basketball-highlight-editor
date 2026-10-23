@@ -21,6 +21,8 @@ from .adapters.analysis import (
     candidate_to_row,
     flatten_coarse_matches,
     merge_same_shot_matches,
+    rim_events_to_matches,
+    rim_scan_command,
     flatten_refined_matches,
     PipelineCancelled,
     run_pipeline,
@@ -36,6 +38,7 @@ from basketball_highlight.tracking import link_ball_detections
 
 
 ANALYSIS_ALGORITHM_VERSION = "python-v2.15-net-follows-rim"
+RIM_ALGORITHM_VERSION = "rim-events-v1"
 
 
 class EngineService:
@@ -905,10 +908,11 @@ class EngineService:
         video_id = payload.get("video_id")
         if not isinstance(video_id, str) or not store.video(video_id):
             raise ProtocolError("VIDEO_NOT_FOUND", "分析任务缺少有效视频")
-        if not store.active_roi(video_id):
-            raise ProtocolError("ROI_INVALID", "分析前必须保存篮筐 ROI")
         mode = payload.get("mode") or store.analysis_mode()
-        if mode not in {"fast", "standard"}:
+        # 标准模式自动跟踪篮筐，不需要事先保存 ROI。
+        if mode != "standard" and not store.active_roi(video_id):
+            raise ProtocolError("ROI_INVALID", "分析前必须保存篮筐 ROI")
+        if mode not in {"fast", "standard", "legacy"}:
             raise ProtocolError("ANALYSIS_MODE_INVALID", "分析模式必须是 fast 或 standard")
         video = store.video(video_id)
         if video:
@@ -1215,6 +1219,140 @@ class EngineService:
             "source": "coarse_crossing",
         }
 
+    def _run_rim_analysis(
+        self,
+        store: ProjectStore,
+        payload: Dict[str, Any],
+        job_id: str,
+        video: Dict[str, Any],
+        roi: Dict[str, Any] | None,
+        checkpoint: Dict[str, Any],
+        analysis_started: float,
+    ) -> None:
+        """Automatic analysis: hoop tracking, rim events and the make model.
+
+        Raises like ``_run_analysis``; the caller records failures.
+        """
+        video_id = video["id"]
+        source_video = self._validated_source(video)
+        repo_root = Path(__file__).resolve().parents[3]
+        model_path = Path(payload.get("model_path") or self._default_model_path(repo_root)).expanduser().resolve()
+        if not model_path.is_file():
+            raise ProtocolError("MODEL_LOAD_FAILED", f"模型不存在: {model_path}")
+        analysis_start_ms = int(video.get("analysis_start_ms") or 0)
+        analysis_end_ms = int(video.get("analysis_end_ms") or video.get("duration_ms") or 0)
+        analysis_parameters = {
+            "algorithm_version": RIM_ALGORITHM_VERSION,
+            "mode": "standard",
+            "source_path": str(source_video),
+            "source_size_bytes": video.get("source_size_bytes"),
+            "source_mtime_ns": video.get("source_mtime_ns"),
+            "model_path": str(model_path),
+            "model_mtime_ns": model_path.stat().st_mtime_ns,
+            "before_seconds": float(payload.get("before_seconds", 6)),
+            "after_seconds": float(payload.get("after_seconds", 3)),
+            "analysis_start_ms": analysis_start_ms,
+            "analysis_end_ms": analysis_end_ms,
+        }
+        analysis_key = hashlib.sha256(
+            json.dumps(analysis_parameters, ensure_ascii=False, sort_keys=True).encode("utf-8")
+        ).hexdigest()[:16]
+        run_root = store.root / "artifacts" / "detections" / f"{video_id}_{analysis_key}"
+        scan_output = run_root / "rim_scan.json"
+        manifest_path = run_root / "manifest.json"
+        command = rim_scan_command(
+            repo_root, source_video, model_path, scan_output,
+            store.root / "artifacts" / "detections" / "rim_cache",
+            analysis_start_ms, analysis_end_ms,
+        )
+        checkpoint.update({
+            "mode": "standard",
+            "analysis_key": analysis_key,
+            "analysis_parameters": analysis_parameters,
+            "rim_scan": str(scan_output),
+            "manifest": str(manifest_path),
+        })
+
+        def on_stage(stage: str, progress: float) -> None:
+            store.update_job(job_id, state="running", stage=stage, progress=progress, checkpoint=checkpoint)
+
+        store.update_job(job_id, state="running", stage="validate_input", progress=0.01, checkpoint=checkpoint)
+        cancel_event = self._job_cancel_events.get(job_id)
+        pipeline = run_pipeline(
+            [command],
+            scan_output,
+            on_stage,
+            cancel_check=cancel_event.is_set if cancel_event else None,
+            process_callback=lambda process: self._set_job_process(job_id, process),
+            manifest_path=manifest_path,
+            stage_outputs=[scan_output],
+            manifest_version=RIM_ALGORITHM_VERSION,
+            stage_names=["rim_scan"],
+        )
+        if cancel_event and cancel_event.is_set():
+            raise PipelineCancelled("JOB_CANCELLED")
+        scan = pipeline["refined"]
+        if roi is None:
+            roi = self._auto_roi_from_scan(store, video, scan)
+        matches = merge_same_shot_matches(rim_events_to_matches(scan))
+        rows = [
+            candidate_to_row(
+                match,
+                video_id=video_id,
+                roi_id=roi["id"],
+                duration_ms=int(video.get("duration_ms") or 0),
+                before_seconds=float(payload.get("before_seconds", 6)),
+                after_seconds=float(payload.get("after_seconds", 3)),
+                detector_version=f"{RIM_ALGORITHM_VERSION}:standard",
+                analysis_source="rim_scan",
+            )
+            for match in matches
+        ]
+        store.update_job(job_id, state="running", stage="prepare_review_previews", progress=0.96)
+        eager_preview_rows = rows[:12]
+        preview_started = time.perf_counter()
+        preview_counts = self._prepare_candidate_previews(
+            store=store,
+            source=source_video,
+            video=video,
+            video_id=video_id,
+            rows=eager_preview_rows,
+            job_id=job_id,
+            cancel_event=cancel_event,
+        )
+        stage_timings_ms = dict(pipeline.get("stage_timings_ms", {}))
+        stage_timings_ms["prepare_review_previews"] = round((time.perf_counter() - preview_started) * 1000)
+        preview_counts["deferred"] = len(rows) - len(eager_preview_rows)
+        if cancel_event and cancel_event.is_set():
+            raise PipelineCancelled("JOB_CANCELLED")
+        store.replace_candidates(video_id, rows)
+        checkpoint.update({
+            "candidate_count": len(rows),
+            "rim_event_count": len(scan.get("events", [])),
+            "preview_counts": preview_counts,
+            "logs": pipeline["logs"],
+            "cache_hits": pipeline.get("cache_hits", 0),
+            "stage_timings_ms": stage_timings_ms,
+            "total_elapsed_ms": round((time.perf_counter() - analysis_started) * 1000),
+        })
+        store.update_job(job_id, state="completed", stage="persist_candidates", progress=1.0, checkpoint=checkpoint)
+
+    @staticmethod
+    def _auto_roi_from_scan(store: ProjectStore, video: Dict[str, Any], scan: Dict[str, Any]) -> Dict[str, Any]:
+        """Save an ROI around the tracked hoop so candidates and old screens keep working."""
+        width = float(video.get("width") or scan.get("width") or 0)
+        height = float(video.get("height") or scan.get("height") or 0)
+        x1, y1, x2, y2 = [float(v) for v in scan["hoop_bbox"]]
+        hoop_w = max(1.0, x2 - x1)
+        roi = {
+            "x1": max(0.0, x1 - 8 * hoop_w),
+            "y1": max(0.0, y1 - 5 * hoop_w),
+            "x2": min(width, x2 + 8 * hoop_w),
+            "y2": min(height, y2 + 6 * hoop_w),
+            "calibration": {"source": "rim_scan", "hoop_bbox": [x1, y1, x2, y2]},
+        }
+        return store.save_roi(video["id"], roi)
+
     def _run_analysis(self, payload: Dict[str, Any], job_id: str) -> None:
         store = self._require_store(payload)
         analysis_started = time.perf_counter()
@@ -1232,6 +1370,11 @@ class EngineService:
             video_id = payload["video_id"]
             video = store.video(video_id)
             roi = store.active_roi(video_id)
+            mode = payload.get("mode", "standard")
+            if video and mode == "standard":
+                # 标准模式：自动跟踪篮筐、判断进球，不依赖手动框选的检测区域。
+                self._run_rim_analysis(store, payload, job_id, video, roi, checkpoint, analysis_started)
+                return
             if not video or not roi:
                 raise ProtocolError("VIDEO_NOT_FOUND", "分析任务数据已失效")
             # Analysis and review currently share the linked source video.
@@ -1243,7 +1386,9 @@ class EngineService:
             model_path = Path(payload.get("model_path") or self._default_model_path(repo_root)).expanduser().resolve()
             if not model_path.is_file():
                 raise ProtocolError("MODEL_LOAD_FAILED", f"模型不存在: {model_path}")
-            mode = payload.get("mode", "standard")
+            if mode == "legacy":
+                # 旧版穿框规则 + 精扫，仅用于对比。
+                mode = "standard"
             if mode not in {"fast", "standard"}:
                 raise ProtocolError("ANALYSIS_MODE_INVALID", "分析模式必须是 fast 或 standard")
             if mode == "fast":

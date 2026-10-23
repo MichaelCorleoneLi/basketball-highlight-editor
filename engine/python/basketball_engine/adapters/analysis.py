@@ -184,6 +184,61 @@ def merge_same_shot_matches(
     return merged
 
 
+# 低于这个进球概率的篮筐事件不进入审核列表。在 9 个已标注视频上留一个
+# 视频交叉验证：0.35 时找回约 94% 的进球，候选数约为旧版的一半。
+RIM_MAKE_THRESHOLD = 0.35
+
+
+def rim_scan_command(
+    repo_root: Path,
+    source_video: Path,
+    model_path: Path,
+    output: Path,
+    cache_dir: Path,
+    analysis_start_ms: int = 0,
+    analysis_end_ms: int | None = None,
+) -> list[str]:
+    command = [
+        sys.executable, _script(repo_root, "rim_scan.py"),
+        "--video", str(source_video), "--model", str(model_path),
+        "--output", str(output), "--cache-dir", str(cache_dir),
+        "--start", str(max(0.0, analysis_start_ms / 1000.0)),
+    ]
+    if analysis_end_ms:
+        command += ["--end", str(analysis_end_ms / 1000.0)]
+    return command
+
+
+def rim_events_to_matches(
+    scan: Dict[str, Any],
+    threshold: float = RIM_MAKE_THRESHOLD,
+) -> list[Dict[str, Any]]:
+    """Turn rim-scan events into candidate matches for ``candidate_to_row``."""
+    matches = []
+    for event in scan.get("events", []):
+        probability = float(event.get("make_probability", 0.0))
+        if probability < threshold:
+            continue
+        hoop = event.get("hoop_source") or {}
+        rim = {
+            "center_x": hoop.get("center_x"),
+            "rim_y": hoop.get("top"),
+            "width": hoop.get("width"),
+            "height": hoop.get("height"),
+        }
+        matches.append({
+            "time": float(event["time"]),
+            "score": round(probability, 3),
+            "make_probability": round(probability, 3),
+            "confidence": "high" if probability >= 0.8 else "medium" if probability >= 0.5 else "low",
+            "verdict": "made" if probability >= 0.8 else "ambiguous",
+            "rim_features": event.get("features", {}),
+            "rim": rim,
+            "overlay": {"rim": rim, "source": "rim_scan"},
+        })
+    return matches
+
+
 def candidate_to_row(
     match: Dict[str, Any],
     video_id: str,
@@ -310,8 +365,11 @@ def run_pipeline(
     manifest_path: Path | None = None,
     stage_outputs: Iterable[Path | None] | None = None,
     manifest_version: str | int = 1,
+    stage_names: Iterable[str] | None = None,
 ) -> Dict[str, Any]:
-    stages = ("prepare_proxy", "coarse_scan", "generate_candidates", "refine_candidates")
+    stages = tuple(stage_names) if stage_names else (
+        "prepare_proxy", "coarse_scan", "generate_candidates", "refine_candidates",
+    )
     if len(commands) == 4:
         stage_ranges = (
             (0.01, 0.14),
