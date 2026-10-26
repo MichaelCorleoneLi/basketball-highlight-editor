@@ -34,7 +34,8 @@ BHE（Basketball Highlight Editor）：本地分析篮球比赛视频，找出�
 - `engine/python/basketball_engine/service.py`：协议 handler；
 - `engine/python/basketball_engine/storage.py`：SQLite 读写和旧库兼容迁移；
 - `scripts/build_macos_release.sh` / `scripts/prepare_macos_runtime.sh`：打包；
-- `scripts/install_macos_app.sh`：本机构建并安装到 `/Applications`。
+- `scripts/install_macos_app.sh`：本机构建并安装到 `/Applications`；
+- `scripts/auto_cut_folder.py`：无界面批量剪辑“待剪辑”文件夹（n8n 手动触发），见 `docs/AUTO_CUT.md`。目前不识别投篮人、不经人工审核。
 
 本机偏好（主题、语言、最近项目目录、常用球员名单）都用 `SharedPreferences`；项目数据都走 Engine。
 

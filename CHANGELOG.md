@@ -6,6 +6,7 @@
 
 ### Added
 
+- `scripts/auto_cut_folder.py`：无界面批量处理“待剪辑”文件夹，自动分析、导出进球集锦（按录制日期分文件夹），供 n8n 手动触发；不识别投篮人、不经人工审核，自动建的项目可在桌面端继续审核（`docs/AUTO_CUT.md`）；
 - 标准分析模式改为自动识别：不再需要手动框检测区域和篮网，Engine 全程跟踪篮筐，找出每次“球到篮筐”并用进球模型打分（`scripts/rim_scan.py`、`src/basketball_highlight/rim_events.py`）。在 9 个已标注视频上，需要审核的片段从 395 个降到 172 个，覆盖 95% 的已标进球，另外找回约 10 个旧版漏掉的进球（`docs/research/RIM_EVENTS_MODEL_20261023.md`）；
 - 导入配置页新增“直接自动分析”，选完视频和分析范围即可开始；
 - `scripts/train_make_model.py`：用审核标签重训进球模型并给出交叉验证结果；
